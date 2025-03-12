@@ -1,10 +1,10 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using PineconeIntegrationTests.Support;
-using VectorDataSpecificationTests.CRUD;
+using VectorDataSpecificationTests.Collections;
 using Xunit;
 
-namespace PineconeIntegrationTests.CRUD;
+namespace PineconeIntegrationTests.Collections;
 
 public class PineconeCollectionConformanceTests(PineconeFixture fixture)
     : CollectionConformanceTests<string>(fixture), IClassFixture<PineconeFixture>

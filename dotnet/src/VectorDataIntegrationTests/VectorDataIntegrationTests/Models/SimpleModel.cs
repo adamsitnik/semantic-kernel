@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using Microsoft.Extensions.VectorData;
+using Xunit;
 
 namespace VectorDataSpecificationTests.Models;
 
@@ -11,10 +12,10 @@ namespace VectorDataSpecificationTests.Models;
 /// <typeparam name="TKey">TKey is a generic parameter because different connectors support different key types.</typeparam>
 public sealed class SimpleModel<TKey>
 {
-    public const int DimensionCount = 10;
+    public const int DimensionCount = 3;
 
     [VectorStoreRecordKey(StoragePropertyName = "key")]
-    public TKey? Id { get; set; }
+    public TKey Id { get; set; } = default!;
 
     [VectorStoreRecordData(StoragePropertyName = "text")]
     public string? Text { get; set; }
@@ -24,4 +25,21 @@ public sealed class SimpleModel<TKey>
 
     [VectorStoreRecordVector(Dimensions: DimensionCount, StoragePropertyName = "embedding")]
     public ReadOnlyMemory<float> Floats { get; set; }
+
+    public void AssertEqual(SimpleModel<TKey>? other, bool includeVectors)
+    {
+        Assert.NotNull(other);
+        Assert.Equal(this.Id, other.Id);
+        Assert.Equal(this.Text, other.Text);
+        Assert.Equal(this.Number, other.Number);
+
+        if (includeVectors)
+        {
+            Assert.Equal(this.Floats.ToArray(), other.Floats.ToArray());
+        }
+        else
+        {
+            Assert.Equal(0, other.Floats.Length);
+        }
+    }
 }

@@ -6,7 +6,7 @@ using Xunit;
 
 namespace RedisIntegrationTests.CRUD;
 
-public class RedisRecordConformanceTests(RedisFixture fixture)
-    : RecordConformanceTests<string>(fixture), IClassFixture<RedisFixture>
+public class RedisRecordConformanceTests(RedisSimpleModelFixture fixture)
+    : RecordConformanceTests<string>(fixture), IClassFixture<RedisSimpleModelFixture>
 {
 }

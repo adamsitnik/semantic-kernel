@@ -1,10 +1,10 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using SqlServerIntegrationTests.Support;
-using VectorDataSpecificationTests.CRUD;
+using VectorDataSpecificationTests.Collections;
 using Xunit;
 
-namespace SqlServerIntegrationTests.CRUD;
+namespace SqlServerIntegrationTests.Collections;
 
 public class SqlServerCollectionConformanceTests(SqlServerFixture fixture)
     : CollectionConformanceTests<string>(fixture), IClassFixture<SqlServerFixture>

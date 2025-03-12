@@ -4,7 +4,7 @@ using VectorDataSpecificationTests.Support;
 
 namespace PineconeIntegrationTests.Support;
 
-public class PineconeFixture : VectorStoreFixture
+public class PineconeSimpleModelFixture : SimpleModelFixture<string>
 {
     public override TestStore TestStore => PineconeTestStore.Instance;
 }

@@ -6,7 +6,7 @@ using Xunit;
 
 namespace PineconeIntegrationTests.CRUD;
 
-public class PineconeBatchConformanceTests(PineconeFixture fixture)
-    : BatchConformanceTests<string>(fixture), IClassFixture<PineconeFixture>
+public class PineconeBatchConformanceTests(PineconeSimpleModelFixture fixture)
+    : BatchConformanceTests<string>(fixture), IClassFixture<PineconeSimpleModelFixture>
 {
 }

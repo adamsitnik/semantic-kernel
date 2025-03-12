@@ -7,120 +7,146 @@ using Xunit;
 
 namespace VectorDataSpecificationTests.CRUD;
 
-public abstract class BatchConformanceTests<TKey>(VectorStoreFixture fixture)
-    : ConformanceTestsBase<TKey, SimpleModel<TKey>>(fixture) where TKey : notnull
+public abstract class BatchConformanceTests<TKey>(SimpleModelFixture<TKey> fixture) where TKey : notnull
 {
     [ConditionalFact]
-    public async Task UpsertBatchAsync_EmptyBatch_DoesNotThrow()
+    public async Task GetBatchAsyncThrowsArgumentNullExceptionForNullKeys()
     {
-        await this.ExecuteAsync(async collection =>
-        {
-            Assert.Empty(await collection.UpsertBatchAsync([]).ToArrayAsync());
-        });
+        ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() => fixture.Collection.GetBatchAsync(keys: null!).ToArrayAsync().AsTask());
+        Assert.Equal("keys", ex.ParamName);
     }
 
     [ConditionalFact]
-    public async Task DeleteBatchAsync_EmptyBatch_DoesNotThrow()
+    public async Task GetBatchAsyncDoesNotThrowForEmptyBatch()
     {
-        await this.ExecuteAsync(async collection =>
-        {
-            await collection.DeleteBatchAsync([]);
-        });
+        Assert.Empty(await fixture.Collection.GetBatchAsync([]).ToArrayAsync());
     }
 
     [ConditionalFact]
-    public async Task GetBatchAsync_EmptyBatch_DoesNotThrow()
+    public Task GetBatchAsyncReturnsInsertedRecords_WithVectors()
+        => this.GetBatchAsyncReturnsInsertedRecords(includeVectors: true);
+
+    [ConditionalFact]
+    public Task GetBatchAsyncReturnsInsertedRecords_WithoutVectors()
+        => this.GetBatchAsyncReturnsInsertedRecords(includeVectors: false);
+
+    private async Task GetBatchAsyncReturnsInsertedRecords(bool includeVectors)
     {
-        await this.ExecuteAsync(async collection =>
+        var expectedRecords = fixture.TestData;
+        var ids = expectedRecords.Select(record => record.Id);
+
+        var received = await fixture.Collection.GetBatchAsync(ids, new() { IncludeVectors = includeVectors }).ToArrayAsync();
+
+        foreach (var record in expectedRecords)
         {
-            Assert.Empty(await collection.GetBatchAsync([]).ToArrayAsync());
-        });
+            record.AssertEqual(this.GetRecord(received, record.Id), includeVectors);
+        }
     }
 
     [ConditionalFact]
-    public async Task UpsertBatchAsync_NullBatch_ThrowsArgumentNullException()
+    public async Task UpsertBatchAsyncThrowsArgumentNullExceptionForNullBatch()
     {
-        await this.ExecuteAsync(async collection =>
-        {
-            ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() => collection.UpsertBatchAsync(records: null!).ToArrayAsync().AsTask());
-            Assert.Equal("records", ex.ParamName);
-        });
+        ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() => fixture.Collection.UpsertBatchAsync(records: null!).ToArrayAsync().AsTask());
+        Assert.Equal("records", ex.ParamName);
     }
 
     [ConditionalFact]
-    public async Task DeleteBatchAsync_NullKeys_ThrowsArgumentNullException()
+    public async Task UpsertBatchAsyncDoesNotThrowForEmptyBatch()
     {
-        await this.ExecuteAsync(async collection =>
-        {
-            ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() => collection.DeleteBatchAsync(keys: null!));
-            Assert.Equal("keys", ex.ParamName);
-        });
+        Assert.Empty(await fixture.Collection.UpsertBatchAsync([]).ToArrayAsync());
     }
 
     [ConditionalFact]
-    public async Task GetBatchAsync_NullKeys_ThrowsArgumentNullException()
+    public Task UpsertBatchAsyncCanInsertNewRecord_WithVectors()
+        => this.UpsertBatchAsyncCanInsertNewRecords(includeVectors: true);
+
+    [ConditionalFact]
+    public Task UpsertBatchAsyncCanInsertNewRecord_WithoutVectors()
+        => this.UpsertBatchAsyncCanInsertNewRecords(includeVectors: false);
+
+    private async Task UpsertBatchAsyncCanInsertNewRecords(bool includeVectors)
     {
-        await this.ExecuteAsync(async collection =>
+        var collection = fixture.Collection;
+        SimpleModel<TKey>[] inserted = Enumerable.Range(0, 10).Select(i => new SimpleModel<TKey>()
         {
-            ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() => collection.GetBatchAsync(keys: null!).ToArrayAsync().AsTask());
-            Assert.Equal("keys", ex.ParamName);
-        });
+            Id = fixture.GenerateNextKey<TKey>(),
+            Number = 100 + i,
+            Text = i.ToString(),
+            Floats = Enumerable.Range(0, SimpleModel<TKey>.DimensionCount).Select(j => (float)(i + j)).ToArray()
+        }).ToArray();
+        var keys = inserted.Select(record => record.Id).ToArray();
+
+        Assert.Empty(await collection.GetBatchAsync(keys).ToArrayAsync());
+        var receivedKeys = await collection.UpsertBatchAsync(inserted).ToArrayAsync();
+        Assert.Equal(keys.ToHashSet(), receivedKeys.ToHashSet()); // .ToHashSet() to ignore order
+
+        var received = await collection.GetBatchAsync(keys, new() { IncludeVectors = includeVectors }).ToArrayAsync();
+        foreach (var record in inserted)
+        {
+            record.AssertEqual(this.GetRecord(received, record.Id), includeVectors);
+        }
     }
 
     [ConditionalFact]
-    public Task CanInsertUpdateAndDelete_WithVectors()
-        => this.CanInsertUpdateAndDelete(includeVectors: true);
+    public Task UpsertBatchAsyncCanUpdateExistingRecords_WithVectors()
+        => this.UpsertBatchAsyncCanUpdateExistingRecords(includeVectors: true);
 
     [ConditionalFact]
-    public Task CanInsertUpdateAndDelete_WithoutVectors()
-        => this.CanInsertUpdateAndDelete(includeVectors: false);
+    public Task UpsertBatchAsyncCanUpdateExistingRecords_WithoutVectors()
+        => this.UpsertBatchAsyncCanUpdateExistingRecords(includeVectors: false);
 
-    private async Task CanInsertUpdateAndDelete(bool includeVectors)
+    private async Task UpsertBatchAsyncCanUpdateExistingRecords(bool includeVectors)
     {
-        await this.ExecuteAsync(async collection =>
+        SimpleModel<TKey>[] inserted = Enumerable.Range(0, 10).Select(i => new SimpleModel<TKey>()
         {
-            SimpleModel<TKey>[] inserted = Enumerable.Range(0, 10).Select(i => new SimpleModel<TKey>()
-            {
-                Id = this.Fixture.GenerateNextKey<TKey>(),
-                Number = 100 + i,
-                Text = i.ToString(),
-                Floats = Enumerable.Range(0, 10).Select(j => (float)(i + j)).ToArray()
-            }).ToArray();
+            Id = fixture.GenerateNextKey<TKey>(),
+            Number = 100 + i,
+            Text = i.ToString(),
+            Floats = Enumerable.Range(0, SimpleModel<TKey>.DimensionCount).Select(j => (float)(i + j)).ToArray()
+        }).ToArray();
+        await fixture.Collection.UpsertBatchAsync(inserted).ToArrayAsync();
 
-            TKey[] keys = await collection.UpsertBatchAsync(inserted).ToArrayAsync();
-            Assert.Equal(
-                inserted.Select(r => r.Id).OrderBy(id => id).ToArray(),
-                keys.OrderBy(id => id).ToArray());
+        SimpleModel<TKey>[] updated = inserted.Select(i => new SimpleModel<TKey>()
+        {
+            Id = i.Id,
+            Text = i.Text + "updated",
+            Number = i.Number + 200,
+            Floats = i.Floats
+        }).ToArray();
 
-            SimpleModel<TKey>[] received = await collection.GetBatchAsync(keys, new() { IncludeVectors = includeVectors }).ToArrayAsync();
-            for (int i = 0; i < inserted.Length; i++)
-            {
-                this.AssertEqual(inserted[i], this.GetRecord(received, inserted[i].Id!), includeVectors);
-            }
+        var keys = await fixture.Collection.UpsertBatchAsync(updated).ToArrayAsync();
+        Assert.Equal(
+            updated.Select(r => r.Id).OrderBy(id => id).ToArray(),
+            keys.OrderBy(id => id).ToArray());
 
-            SimpleModel<TKey>[] updated = inserted.Select(i => new SimpleModel<TKey>()
-            {
-                Id = i.Id,
-                Text = i.Text + "updated",
-                Number = i.Number + 200,
-                Floats = i.Floats
-            }).ToArray();
+        var received = await fixture.Collection.GetBatchAsync(keys, new() { IncludeVectors = includeVectors }).ToArrayAsync();
+        foreach (var record in updated)
+        {
+            record.AssertEqual(this.GetRecord(received, record.Id), includeVectors);
+        }
+    }
 
-            keys = await collection.UpsertBatchAsync(updated).ToArrayAsync();
-            Assert.Equal(
-                updated.Select(r => r.Id).OrderBy(id => id).ToArray(),
-                keys.OrderBy(id => id).ToArray());
+    [ConditionalFact]
+    public async Task DeleteBatchAsyncDoesNotThrowForEmptyBatch()
+    {
+        await fixture.Collection.DeleteBatchAsync([]);
+    }
 
-            received = await collection.GetBatchAsync(keys, new() { IncludeVectors = includeVectors }).ToArrayAsync();
-            for (int i = 0; i < updated.Length; i++)
-            {
-                this.AssertEqual(updated[i], this.GetRecord(received, updated[i].Id!), includeVectors);
-            }
+    [ConditionalFact]
+    public async Task DeleteBatchAsyncThrowsArgumentNullExceptionForNullKeys()
+    {
+        ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() => fixture.Collection.DeleteBatchAsync(keys: null!));
+        Assert.Equal("keys", ex.ParamName);
+    }
 
-            await collection.DeleteBatchAsync(keys);
+    [ConditionalFact]
+    public async Task DeleteBatchAsyncDeletesTheRecords()
+    {
+        TKey[] idsToRemove = [fixture.TestData[2].Id, fixture.TestData[3].Id];
 
-            Assert.False(await collection.GetBatchAsync(keys).AnyAsync());
-        });
+        Assert.NotEmpty(await fixture.Collection.GetBatchAsync(idsToRemove).ToArrayAsync());
+        await fixture.Collection.DeleteBatchAsync(idsToRemove);
+        Assert.Empty(await fixture.Collection.GetBatchAsync(idsToRemove).ToArrayAsync());
     }
 
     // The order of records in the received array is not guaranteed
