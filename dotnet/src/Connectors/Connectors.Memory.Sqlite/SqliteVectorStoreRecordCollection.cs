@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.Data.Common;
-using System.Diagnostics;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
@@ -49,18 +48,6 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
     /// <summary>The storage name of the key property.</summary>
     private readonly string _keyStorageName;
 
-    /// <summary>Collection of properties to operate in SQLite data table.</summary>
-    private readonly List<VectorStoreRecordPropertyModel> _dataTableProperties = [];
-
-    /// <summary>Collection of properties to operate in SQLite vector table.</summary>
-    private readonly List<VectorStoreRecordPropertyModel> _vectorTableProperties = [];
-
-    /// <summary>Collection of property names to operate in SQLite data table.</summary>
-    private readonly List<string> _dataTableStoragePropertyNames = [];
-
-    /// <summary>Collection of property names to operate in SQLite vector table.</summary>
-    private readonly List<string> _vectorTableStoragePropertyNames = [];
-
     /// <summary>Table name in SQLite for data properties.</summary>
     private readonly string _dataTableName;
 
@@ -104,33 +91,6 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
 
         // Populate some collections of properties
         this._keyStorageName = this._model.KeyProperty.StorageName;
-
-        foreach (var property in this._model.Properties)
-        {
-            switch (property)
-            {
-                case VectorStoreRecordKeyPropertyModel keyProperty:
-                    this._dataTableProperties.Add(keyProperty);
-                    this._vectorTableProperties.Add(keyProperty);
-                    this._dataTableStoragePropertyNames.Add(keyProperty.StorageName);
-                    this._vectorTableStoragePropertyNames.Add(keyProperty.StorageName);
-                    break;
-
-                case VectorStoreRecordDataPropertyModel dataProperty:
-                    this._dataTableProperties.Add(dataProperty);
-                    this._dataTableStoragePropertyNames.Add(dataProperty.StorageName);
-                    break;
-
-                case VectorStoreRecordVectorPropertyModel vectorProperty:
-                    this._vectorTableProperties.Add(vectorProperty);
-                    this._vectorTableStoragePropertyNames.Add(vectorProperty.StorageName);
-                    break;
-
-                default:
-                    throw new UnreachableException();
-            }
-        }
-
         this._mapper = this._options.DictionaryCustomMapper ?? new SqliteVectorStoreRecordMapper<TRecord>(this._model);
     }
 
@@ -259,32 +219,57 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
         SqliteFilterTranslator translator = new(this._model, filter);
         translator.Translate(appendWhere: false);
 
-        var orderByPropertyNames = options.Sort.Values
-            .Select(pair => new KeyValuePair<string, bool>(this._model.GetDataOrKeyProperty(pair.Key).StorageName, pair.Value));
-
-        IReadOnlyList<VectorStoreRecordPropertyModel> properties = options.IncludeVectors
-            ? this._model.Properties
-            : [this._model.KeyProperty, .. this._model.DataProperties];
-
         using var connection = await this.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
-        using var command = SqliteVectorStoreCollectionCommandBuilder.BuildSelectWhereCommand(
-            connection,
-            top,
-            options,
-            this._dataTableName,
-            this._model.Properties,
-            translator.Clause.ToString(),
-            translator.Parameters,
-            orderByPropertyNames);
+        DbCommand? command = null;
 
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        if (options.IncludeVectors)
         {
-            yield return this.GetAndMapRecord(
-                "Get",
-                reader,
-                properties,
-                options.IncludeVectors);
+            var orderByPropertyNames = options.Sort.Values
+                .Select(pair => new KeyValuePair<string, bool>(
+                    $"\"{this._dataTableName}\".\"{this._model.GetDataOrKeyProperty(pair.Key).StorageName}\"", pair.Value));
+
+            command = SqliteVectorStoreCollectionCommandBuilder.BuildSelectLeftJoinCommand(
+                connection,
+                this._vectorTableName,
+                this._dataTableName,
+                this._keyStorageName,
+                this._model,
+                [],
+                includeDistance: false,
+                orderByPropertyNames,
+                translator.Clause.ToString(),
+                translator.Parameters,
+                top: top,
+                skip: options.Skip);
+        }
+        else
+        {
+            var orderByPropertyNames = options.Sort.Values
+                .Select(pair => new KeyValuePair<string, bool>(this._model.GetDataOrKeyProperty(pair.Key).StorageName, pair.Value));
+
+            command = SqliteVectorStoreCollectionCommandBuilder.BuildSelectDataCommand(
+                connection,
+                this._dataTableName,
+                this._model,
+                [],
+                orderByPropertyNames,
+                translator.Clause.ToString(),
+                translator.Parameters,
+                top: top,
+                skip: options.Skip);
+        }
+
+        using (command)
+        {
+            using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return this.GetAndMapRecord(
+                    "Get",
+                    reader,
+                    this._model.Properties,
+                    options.IncludeVectors);
+            }
         }
     }
 
@@ -416,20 +401,6 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         const string OperationName = "VectorizedSearch";
-        const string DistancePropertyName = "distance";
-
-        var leftTableProperties = new List<string> { DistancePropertyName };
-
-        List<VectorStoreRecordPropertyModel> properties = [this._model.KeyProperty, .. this._model.DataProperties];
-
-        if (searchOptions.IncludeVectors)
-        {
-            foreach (var property in this._model.VectorProperties)
-            {
-                leftTableProperties.Add(property.StorageName);
-            }
-            properties.AddRange(this._model.VectorProperties);
-        }
 
         using var connection = await this.GetConnectionAsync(cancellationToken).ConfigureAwait(false);
         using var command = SqliteVectorStoreCollectionCommandBuilder.BuildSelectLeftJoinCommand(
@@ -437,12 +408,12 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
             this._vectorTableName,
             this._dataTableName,
             this._keyStorageName,
-            leftTableProperties,
-            this._dataTableStoragePropertyNames,
+            this._model,
             conditions,
+            includeDistance: true,
+            [new(SqliteVectorStoreCollectionCommandBuilder.DistancePropertyName, true)],
             extraWhereFilter,
-            extraParameters,
-            DistancePropertyName);
+            extraParameters);
 
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -450,12 +421,12 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
         {
             if (recordCounter >= searchOptions.Skip)
             {
-                var score = SqliteVectorStoreRecordPropertyMapping.GetPropertyValue<double>(reader, DistancePropertyName);
+                var score = SqliteVectorStoreRecordPropertyMapping.GetPropertyValue<double>(reader, SqliteVectorStoreCollectionCommandBuilder.DistancePropertyName);
 
                 var record = this.GetAndMapRecord(
                     OperationName,
                     reader,
-                    properties,
+                    this._model.Properties,
                     searchOptions.IncludeVectors);
 
                 yield return new VectorSearchResult<TRecord>(record, score);
@@ -465,7 +436,7 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
 
     private async Task InternalCreateCollectionAsync(SqliteConnection connection, bool ifNotExists, CancellationToken cancellationToken)
     {
-        List<SqliteColumn> dataTableColumns = SqliteVectorStoreRecordPropertyMapping.GetColumns(this._dataTableProperties);
+        List<SqliteColumn> dataTableColumns = SqliteVectorStoreRecordPropertyMapping.GetColumns(this._model.Properties, data: true);
 
         await this.CreateTableAsync(connection, this._dataTableName, dataTableColumns, ifNotExists, cancellationToken)
             .ConfigureAwait(false);
@@ -476,7 +447,7 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
                 this._options.VectorSearchExtensionName :
                 SqliteConstants.VectorSearchExtensionName;
 
-            List<SqliteColumn> vectorTableColumns = SqliteVectorStoreRecordPropertyMapping.GetColumns(this._vectorTableProperties);
+            List<SqliteColumn> vectorTableColumns = SqliteVectorStoreRecordPropertyMapping.GetColumns(this._model.Properties, data: false);
 
             await this.CreateVirtualTableAsync(connection, this._vectorTableName, vectorTableColumns, ifNotExists, extensionName!, cancellationToken)
                 .ConfigureAwait(false);
@@ -559,7 +530,6 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
         bool includeVectors = options?.IncludeVectors is true && this._vectorPropertiesExist;
 
         DbCommand command;
-        List<VectorStoreRecordPropertyModel> properties = [this._model.KeyProperty, .. this._model.DataProperties];
 
         if (includeVectors)
         {
@@ -568,19 +538,19 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
                 this._dataTableName,
                 this._vectorTableName,
                 this._keyStorageName,
-                this._dataTableStoragePropertyNames,
-                this._model.VectorProperties.Select(p => p.StorageName).ToList(),
-                [condition]);
-
-            properties.AddRange(this._model.VectorProperties);
+                this._model,
+                [condition],
+                false,
+                []);
         }
         else
         {
-            command = SqliteVectorStoreCollectionCommandBuilder.BuildSelectCommand(
+            command = SqliteVectorStoreCollectionCommandBuilder.BuildSelectDataCommand(
                 connection,
                 this._dataTableName,
-                this._dataTableStoragePropertyNames,
-                [condition]);
+                this._model,
+                [condition],
+                []);
         }
 
         using (command)
@@ -592,7 +562,7 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
                 yield return this.GetAndMapRecord(
                     OperationName,
                     reader,
-                    properties,
+                    this._model.Properties,
                     includeVectors);
             }
         }
@@ -662,8 +632,9 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
                 connection,
                 this._vectorTableName,
                 this._keyStorageName,
-                this._vectorTableStoragePropertyNames,
-                storageModels);
+                this._model,
+                storageModels,
+                data: false);
 
             await vectorInsertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -672,8 +643,9 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
             connection,
             this._dataTableName,
             this._keyStorageName,
-            this._dataTableStoragePropertyNames,
+            this._model,
             storageModels,
+            data: true,
             replaceIfExists: true);
 
         using var reader = await dataCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -751,8 +723,11 @@ public class SqliteVectorStoreRecordCollection<TRecord> :
 
         foreach (var property in properties)
         {
-            var propertyValue = SqliteVectorStoreRecordPropertyMapping.GetPropertyValue(reader, property.StorageName, property.Type);
-            storageModel.Add(property.StorageName, propertyValue);
+            if (includeVectors || property is not VectorStoreRecordVectorPropertyModel)
+            {
+                var propertyValue = SqliteVectorStoreRecordPropertyMapping.GetPropertyValue(reader, property.StorageName, property.Type);
+                storageModel.Add(property.StorageName, propertyValue);
+            }
         }
 
         return VectorStoreErrorHandler.RunModelConversion(
